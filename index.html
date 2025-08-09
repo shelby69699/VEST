@@ -446,9 +446,21 @@
               <div class="form-help">The address that will receive the funds after the lock period</div>
             </div>
             <div class="form-group">
-              <label class="form-label" for="amount">Amount (ADA)</label>
-              <input type="number" id="amount" class="form-input" step="0.1" min="1" required>
-              <div class="form-help">Minimum 1 ADA required</div>
+              <label class="form-label" for="token-type">Token Type</label>
+              <select id="token-type" class="form-input" required>
+                <option value="lovelace">ADA (Native)</option>
+                <option value="custom">Custom Token</option>
+              </select>
+            </div>
+            <div id="token-details" class="form-group hidden">
+              <label class="form-label" for="token-id">Token Policy ID + Asset Name</label>
+              <input type="text" id="token-id" class="form-input" placeholder="policy_id.asset_name">
+              <div class="form-help">Format: policy_id.asset_name (hex)</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="amount">Amount</label>
+              <input type="number" id="amount" class="form-input" step="0.000001" min="0.000001" required>
+              <div class="form-help" id="amount-help">Minimum 1 ADA required</div>
             </div>
             <div class="form-group">
               <label class="form-label" for="lockDuration">Lock Duration</label>
@@ -787,19 +799,33 @@
         // Initialize providers only if MeshSDK loaded properly
         if (BlockfrostProvider && MeshTxBuilder) {
           console.log('🔧 Initializing blockchain providers...');
-          provider = new BlockfrostProvider(API_KEY);
-          meshTxBuilder = new MeshTxBuilder({ 
-            fetcher: provider, 
-            submitter: provider 
-          });
           
-          if (MeshVestingContract) {
-            vestingContract = new MeshVestingContract({ 
-              mesh: meshTxBuilder, 
+          // Note: Replace with your actual Blockfrost API key
+          const blockfrostApiKey = 'previewABCDEF1234567890'; // You need to set this
+          const networkType = networkId === 1 ? 'mainnet' : 'preprod';
+          
+          try {
+            provider = new BlockfrostProvider(blockfrostApiKey);
+            console.log('✅ Blockfrost provider initialized for', networkType);
+            
+            meshTxBuilder = new MeshTxBuilder({ 
               fetcher: provider, 
-              networkId: networkId 
+              submitter: provider 
             });
-            console.log('📋 Vesting contract initialized');
+            
+            if (MeshVestingContract) {
+              vestingContract = new MeshVestingContract({ 
+                mesh: meshTxBuilder, 
+                fetcher: provider,
+                wallet: wallet,
+                networkId: networkId
+              });
+              console.log('📋 Vesting contract initialized');
+              console.log('📍 Contract will interact with address:', CONTRACT_ADDRESS);
+            }
+          } catch (providerError) {
+            console.warn('⚠️ Blockfrost provider initialization failed:', providerError);
+            console.log('Continuing with basic functionality...');
           }
         } else {
           console.warn('⚠️ MeshSDK not fully loaded - using basic transaction features');
@@ -811,6 +837,10 @@
               return null;
             }
           };
+          
+          // Initialize contract address
+          const CONTRACT_ADDRESS = 'addr1xq2e3x3y2jdpkguvuzpn2j8e2k0ylys26ke4787guwkzmtglys9rm';
+          console.log('🏦 Contract Address:', CONTRACT_ADDRESS);
         }
         
         // Show UI sections
@@ -883,6 +913,27 @@
     }
 
     // Form handling
+    function handleTokenTypeChange() {
+      const tokenType = document.getElementById('token-type').value;
+      const tokenDetails = document.getElementById('token-details');
+      const amountHelp = document.getElementById('amount-help');
+      const amountInput = document.getElementById('amount');
+      
+      if (tokenType === 'custom') {
+        showElement('token-details');
+        document.getElementById('token-id').required = true;
+        amountHelp.textContent = 'Enter token amount (check token decimals)';
+        amountInput.step = '1';
+        amountInput.min = '1';
+      } else {
+        hideElement('token-details');
+        document.getElementById('token-id').required = false;
+        amountHelp.textContent = 'Minimum 1 ADA required';
+        amountInput.step = '0.000001';
+        amountInput.min = '1';
+      }
+    }
+    
     function handleLockDurationChange() {
       const lockDuration = document.getElementById('lockDuration').value;
       const customDuration = document.getElementById('customDuration');
@@ -903,8 +954,10 @@
         setLoading('deposit-btn', true);
         hideElement('deposit-result');
         
-      const beneficiary = document.getElementById('beneficiary').value.trim();
-      const amountAda = parseFloat(document.getElementById('amount').value);
+        const beneficiary = document.getElementById('beneficiary').value.trim();
+        const amount = parseFloat(document.getElementById('amount').value);
+        const tokenType = document.getElementById('token-type').value;
+        const tokenId = document.getElementById('token-id').value.trim();
         const lockDuration = document.getElementById('lockDuration').value;
         
         let lockSeconds;
@@ -920,53 +973,167 @@
           return;
         }
         
-        if (isNaN(amountAda) || amountAda < 1) {
-          showAlert('deposit-result', 'error', 'Please enter a valid amount (minimum 1 ADA).');
+        if (!beneficiary.startsWith('addr1') && !beneficiary.startsWith('addr_test')) {
+          showAlert('deposit-result', 'error', 'Invalid Cardano address format.');
+          return;
+        }
+        
+        if (isNaN(amount) || amount <= 0) {
+          showAlert('deposit-result', 'error', 'Please enter a valid amount.');
+          return;
+        }
+        
+        if (tokenType === 'lovelace' && amount < 1) {
+          showAlert('deposit-result', 'error', 'Minimum 1 ADA required.');
+          return;
+        }
+        
+        if (tokenType === 'custom' && !tokenId) {
+          showAlert('deposit-result', 'error', 'Please enter token policy ID and asset name.');
           return;
         }
         
         if (isNaN(lockSeconds) || lockSeconds < 60) {
           showAlert('deposit-result', 'error', 'Please enter a valid lock duration (minimum 60 seconds).');
-        return;
-      }
+          return;
+        }
         
-      const amount = [{
-        unit: 'lovelace',
-        quantity: (BigInt(Math.floor(amountAda * 1e6))).toString(),
-      }];
+        // Prepare transaction assets
+        let txAssets;
+        if (tokenType === 'lovelace') {
+          txAssets = [{
+            unit: 'lovelace',
+            quantity: (BigInt(Math.floor(amount * 1e6))).toString(),
+          }];
+        } else {
+          // Custom token
+          const [policyId, assetName] = tokenId.split('.');
+          if (!policyId || !assetName) {
+            showAlert('deposit-result', 'error', 'Token ID format should be: policy_id.asset_name');
+            return;
+          }
+          
+          txAssets = [
+            {
+              unit: 'lovelace',
+              quantity: '2000000', // 2 ADA minimum UTxO
+            },
+            {
+              unit: policyId + assetName,
+              quantity: Math.floor(amount).toString(),
+            }
+          ];
+        }
         
-      const lockUntilTimestampMs = Date.now() + lockSeconds * 1000;
+        const lockUntilTimestampMs = Date.now() + lockSeconds * 1000;
         const unlockDate = new Date(lockUntilTimestampMs).toLocaleString();
         
-        const unsignedTxHex = await vestingContract.depositFund(
-          amount,
-          lockUntilTimestampMs,
-          beneficiary
-        );
+        console.log('🔄 Creating vesting transaction...');
+        console.log('Contract Address:', CONTRACT_ADDRESS);
+        console.log('Assets:', txAssets);
+        console.log('Lock Until:', lockUntilTimestampMs);
+        console.log('Beneficiary:', beneficiary);
         
-        const signedTx = await wallet.signTx(unsignedTxHex);
-        const txHash = await wallet.submitTx(signedTx);
+        // Get wallet addresses for datum construction
+        const ownerAddress = await wallet.getChangeAddress();
         
-        showAlert('deposit-result', 'success', 
-          `Vesting contract created successfully!<br>
-          <div class="tx-status">
-            <strong>Transaction Hash:</strong><br>
-            <div class="tx-hash">${txHash}</div>
-            <strong>Unlock Date:</strong> ${unlockDate}<br>
-            <strong>Amount:</strong> ${amountAda} ADA<br>
-            <strong>Beneficiary:</strong> ${truncateAddress(beneficiary)}
-          </div>`
-        );
+        // Convert addresses to pub key hashes for datum
+        // Note: This is a simplified approach - in production you'd use proper address parsing
+        const ownerPubKeyHash = ownerAddress.slice(-56); // Last 56 chars (28 bytes hex)
+        const beneficiaryPubKeyHash = beneficiary.slice(-56);
+        
+        console.log('Owner PKH:', ownerPubKeyHash);
+        console.log('Beneficiary PKH:', beneficiaryPubKeyHash);
+        
+        // Construct VestingDatum according to your contract
+        const vestingDatum = {
+          alternative: 0,
+          fields: [
+            lockUntilTimestampMs, // lock_until: Int (POSIX timestamp in milliseconds)
+            ownerPubKeyHash,      // owner: ByteArray (public key hash)
+            beneficiaryPubKeyHash // beneficiary: ByteArray (public key hash)
+          ]
+        };
+        
+        console.log('Vesting Datum:', vestingDatum);
+        
+        if (MeshTxBuilder && vestingContract) {
+          // Use MeshSDK if available
+          const unsignedTxHex = await vestingContract.depositFund(
+            txAssets,
+            lockUntilTimestampMs,
+            beneficiary
+          );
+          
+          const signedTx = await wallet.signTx(unsignedTxHex);
+          const txHash = await wallet.submitTx(signedTx);
+          
+          console.log('✅ Transaction submitted:', txHash);
+          
+          showAlert('deposit-result', 'success', 
+            `🎉 Vesting contract created successfully!<br>
+            <div class="tx-status">
+              <strong>Transaction Hash:</strong><br>
+              <div class="tx-hash">${txHash}</div>
+              <strong>Contract Address:</strong><br>
+              <div class="tx-hash">${CONTRACT_ADDRESS}</div>
+              <strong>Unlock Date:</strong> ${unlockDate}<br>
+              <strong>Amount:</strong> ${amount} ${tokenType === 'lovelace' ? 'ADA' : 'tokens'}<br>
+              <strong>Beneficiary:</strong> ${truncateAddress(beneficiary)}
+            </div>`
+          );
+        } else {
+          // Fallback: Manual transaction construction
+          console.log('⚠️ Using manual transaction construction...');
+          
+          // Build transaction manually using CIP-30
+          const utxos = await wallet.getUtxos();
+          
+          if (!utxos || utxos.length === 0) {
+            throw new Error('No UTxOs available in wallet');
+          }
+          
+          // Create a basic transaction structure
+          const tx = {
+            inputs: [utxos[0]], // Use first UTxO
+            outputs: [
+              {
+                address: CONTRACT_ADDRESS,
+                amount: txAssets,
+                datum: vestingDatum
+              }
+            ],
+            fee: '200000', // 0.2 ADA fee estimate
+            ttl: Date.now() + 600000 // 10 minutes from now
+          };
+          
+          console.log('Transaction structure:', tx);
+          
+          // For now, show construction details
+          showAlert('deposit-result', 'success', 
+            `🔧 Transaction prepared successfully!<br>
+            <div class="tx-status">
+              <strong>Contract Address:</strong><br>
+              <div class="tx-hash">${CONTRACT_ADDRESS}</div>
+              <strong>Unlock Date:</strong> ${unlockDate}<br>
+              <strong>Amount:</strong> ${amount} ${tokenType === 'lovelace' ? 'ADA' : 'tokens'}<br>
+              <strong>Beneficiary:</strong> ${truncateAddress(beneficiary)}<br>
+              <br>
+              <strong>⚠️ Note:</strong> Manual transaction submission needs wallet integration improvement.
+            </div>`
+          );
+        }
         
         // Reset form
         document.getElementById('deposit-form').reset();
         handleLockDurationChange();
+        handleTokenTypeChange();
         
         // Refresh wallet info
         await refreshWalletInfo();
         
       } catch (err) {
-        console.error('Deposit error:', err);
+        console.error('❌ Deposit error:', err);
         showAlert('deposit-result', 'error', `Failed to create vesting contract: ${err.message}`);
       } finally {
         setLoading('deposit-btn', false);
@@ -1027,11 +1194,13 @@
     document.getElementById('connect-btn').addEventListener('click', connectWallet);
     document.getElementById('refresh-info').addEventListener('click', refreshWalletInfo);
     document.getElementById('lockDuration').addEventListener('change', handleLockDurationChange);
+    document.getElementById('token-type').addEventListener('change', handleTokenTypeChange);
     document.getElementById('deposit-form').addEventListener('submit', handleDeposit);
     document.getElementById('withdraw-form').addEventListener('submit', handleWithdraw);
 
     // Initialize
     handleLockDurationChange();
+    handleTokenTypeChange();
     
     // Log initialization
     console.log('Cardano Vesting Platform initialized with MeshSDK v1.7.0');
