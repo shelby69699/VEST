@@ -1,16 +1,41 @@
 {
-  "name": "vest-contract",
-  "version": "1.0.0",
-  "description": "Vesting contract example for Cardano using MeshJS",
+  "name": "cardano-vesting-platform",
+  "version": "2.0.0",
+  "description": "Modern Cardano vesting platform with smart contracts and web interface",
   "type": "module",
-  "main": "src/deposit.js",
+  "main": "index.html",
   "scripts": {
+    "dev": "npx serve . -p 3000",
+    "start": "npx serve . -p 8080",
     "deposit": "node src/deposit.js",
-    "withdraw": "node src/withdraw.js"
+    "withdraw": "node src/withdraw.js",
+    "build": "echo 'Static site ready for deployment'",
+    "preview": "npx serve . -p 4173"
   },
   "dependencies": {
-    "@meshsdk/core": "^1.4.0",
-    "@meshsdk/contracts": "^1.4.0",
+    "@meshsdk/core": "^1.0.1",
+    "@meshsdk/contracts": "^1.0.1",
     "dotenv": "^16.3.0"
+  },
+  "devDependencies": {
+    "serve": "^14.2.1"
+  },
+  "keywords": [
+    "cardano",
+    "vesting",
+    "smart-contracts",
+    "aiken",
+    "meshjs",
+    "web3",
+    "cryptocurrency"
+  ],
+  "author": "Cardano Developer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-username/cardano-vesting-platform.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
