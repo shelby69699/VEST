@@ -519,18 +519,32 @@
     } catch (error) {
       console.error('Failed to load MeshSDK:', error);
       
-      // Fallback: Use direct CIP-30 implementation
+      // Fallback: Use direct CIP-30 implementation with proper wallet support
       BrowserWallet = {
         getAvailableWallets: async () => {
           if (!window.cardano) return [];
           
           const wallets = [];
+          const knownWallets = {
+            nami: { displayName: 'Nami', icon: '🦋' },
+            eternl: { displayName: 'Eternl', icon: '⚡' },
+            flint: { displayName: 'Flint', icon: '🔥' },
+            gerowallet: { displayName: 'GeroWallet', icon: '🦎' },
+            typhoncip30: { displayName: 'Typhon', icon: '🌊' },
+            nufi: { displayName: 'NuFi', icon: '💎' },
+            lace: { displayName: 'Lace', icon: '🎴' },
+            begin: { displayName: 'Begin', icon: '🚀' },
+            vespr: { displayName: 'Vespr', icon: '🌟' }
+          };
+          
           for (const key in window.cardano) {
             const wallet = window.cardano[key];
             if (wallet && typeof wallet.enable === 'function') {
+              const walletInfo = knownWallets[key] || { displayName: key, icon: '💳' };
               wallets.push({
                 name: key,
-                icon: wallet.icon || '',
+                displayName: walletInfo.displayName,
+                icon: walletInfo.icon,
                 version: wallet.apiVersion || '1.0.0'
               });
             }
@@ -545,14 +559,30 @@
           
           const api = await window.cardano[walletName].enable();
           
-          // Add MeshSDK-compatible methods
+          // Add MeshSDK-compatible methods with proper error handling
           return {
             getNetworkId: () => api.getNetworkId(),
             getBalance: () => api.getBalance(),
             getLovelace: async () => {
-              const balance = await api.getBalance();
-              const lovelaceAsset = balance.find(asset => asset.unit === 'lovelace');
-              return lovelaceAsset ? lovelaceAsset.quantity : '0';
+              try {
+                const balance = await api.getBalance();
+                console.log('Raw balance from wallet:', balance);
+                
+                // Handle different balance formats
+                if (Array.isArray(balance)) {
+                  const lovelaceAsset = balance.find(asset => asset.unit === 'lovelace');
+                  return lovelaceAsset ? lovelaceAsset.quantity : '0';
+                } else if (typeof balance === 'string') {
+                  return balance;
+                } else if (balance && balance.lovelace) {
+                  return balance.lovelace;
+                } else {
+                  return '0';
+                }
+              } catch (error) {
+                console.error('Error getting lovelace:', error);
+                return '0';
+              }
             },
             getChangeAddress: () => api.getChangeAddress(),
             signTx: (tx, partialSign) => api.signTx(tx, partialSign),
@@ -583,13 +613,21 @@
 
     function setLoading(buttonId, loading) {
       const button = document.getElementById(buttonId);
+      if (!button) return; // Safety check
+      
       if (loading) {
         button.disabled = true;
-        const spinner = '<div class="spinner"></div>';
-        button.innerHTML = spinner + button.textContent;
+        if (!button.querySelector('.spinner')) {
+          const spinner = document.createElement('div');
+          spinner.className = 'spinner';
+          button.insertBefore(spinner, button.firstChild);
+        }
       } else {
         button.disabled = false;
-        button.querySelector('.spinner')?.remove();
+        const spinner = button.querySelector('.spinner');
+        if (spinner) {
+          spinner.remove();
+        }
       }
     }
 
@@ -612,6 +650,95 @@
       return `${address.slice(0, length)}...${address.slice(-8)}`;
     }
 
+    // Wallet selector UI
+    function showWalletSelector(wallets) {
+      return new Promise((resolve) => {
+        // Create modal
+        const modal = document.createElement('div');
+        modal.style.cssText = `
+          position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+          background: rgba(0,0,0,0.7); display: flex; align-items: center; 
+          justify-content: center; z-index: 10000;
+        `;
+        
+        const content = document.createElement('div');
+        content.style.cssText = `
+          background: white; border-radius: 1rem; padding: 2rem; 
+          max-width: 400px; width: 90%; box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+        `;
+        
+        content.innerHTML = `
+          <h3 style="margin: 0 0 1.5rem 0; text-align: center; color: var(--text-primary);">
+            Select Your Cardano Wallet
+          </h3>
+          <div id="wallet-options" style="display: flex; flex-direction: column; gap: 0.75rem;">
+            ${wallets.map(wallet => `
+              <button class="wallet-option" data-wallet="${wallet.name}" style="
+                display: flex; align-items: center; gap: 1rem; padding: 1rem;
+                border: 2px solid var(--border); border-radius: 0.5rem; 
+                background: white; cursor: pointer; transition: all 0.2s;
+                font-size: 1rem; text-align: left;
+              ">
+                <span style="font-size: 1.5rem;">${wallet.icon}</span>
+                <div>
+                  <div style="font-weight: 600; color: var(--text-primary);">
+                    ${wallet.displayName || wallet.name}
+                  </div>
+                  <div style="font-size: 0.875rem; color: var(--text-secondary);">
+                    Version ${wallet.version}
+                  </div>
+                </div>
+              </button>
+            `).join('')}
+          </div>
+          <button id="cancel-wallet" style="
+            width: 100%; margin-top: 1rem; padding: 0.75rem;
+            border: 1px solid var(--border); border-radius: 0.5rem;
+            background: white; color: var(--text-secondary); cursor: pointer;
+          ">Cancel</button>
+        `;
+        
+        modal.appendChild(content);
+        document.body.appendChild(modal);
+        
+        // Add click handlers
+        content.querySelectorAll('.wallet-option').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            const walletName = e.currentTarget.getAttribute('data-wallet');
+            const selectedWallet = wallets.find(w => w.name === walletName);
+            document.body.removeChild(modal);
+            resolve(selectedWallet);
+          });
+          
+          // Hover effects
+          btn.addEventListener('mouseenter', () => {
+            btn.style.borderColor = 'var(--primary)';
+            btn.style.transform = 'translateY(-2px)';
+            btn.style.boxShadow = '0 4px 12px rgba(0,51,173,0.15)';
+          });
+          
+          btn.addEventListener('mouseleave', () => {
+            btn.style.borderColor = 'var(--border)';
+            btn.style.transform = 'translateY(0)';
+            btn.style.boxShadow = 'none';
+          });
+        });
+        
+        document.getElementById('cancel-wallet').addEventListener('click', () => {
+          document.body.removeChild(modal);
+          resolve(null);
+        });
+        
+        // Close on background click
+        modal.addEventListener('click', (e) => {
+          if (e.target === modal) {
+            document.body.removeChild(modal);
+            resolve(null);
+          }
+        });
+      });
+    }
+
     // Wallet connection with robust error handling
     async function connectWallet() {
       try {
@@ -631,9 +758,17 @@
           throw new Error('No compatible wallets found. Please install Nami, Eternl, Flint, or another CIP-30 wallet.');
         }
         
-        // Select the first available wallet (or let user choose)
-        let selectedWallet = availableWallets[0];
-        console.log(`🎯 Connecting to: ${selectedWallet.name}`);
+        // Show wallet selection UI
+        let selectedWallet;
+        if (availableWallets.length === 1) {
+          selectedWallet = availableWallets[0];
+        } else {
+          selectedWallet = await showWalletSelector(availableWallets);
+          if (!selectedWallet) {
+            throw new Error('No wallet selected');
+          }
+        }
+        console.log(`🎯 Connecting to: ${selectedWallet.displayName || selectedWallet.name}`);
         
         // Connect to wallet
         wallet = await BrowserWallet.enable(selectedWallet.name);
@@ -644,7 +779,7 @@
         console.log(`🌐 Network: ${networkId === 1 ? 'Mainnet' : 'Testnet'}`);
         
         // Update UI
-        document.getElementById('wallet-name').textContent = selectedWallet.name;
+        document.getElementById('wallet-name').textContent = selectedWallet.displayName || selectedWallet.name;
         document.getElementById('wallet-connection-status').className = 'status status-connected';
         showElement('wallet-connection-status');
         hideElement('connect-btn');
@@ -667,7 +802,15 @@
             console.log('📋 Vesting contract initialized');
           }
         } else {
-          console.warn('⚠️ MeshSDK not fully loaded - advanced features disabled');
+          console.warn('⚠️ MeshSDK not fully loaded - using basic transaction features');
+          
+          // Create basic provider for non-MeshSDK functionality
+          provider = {
+            fetchAccountInfo: async (address) => {
+              console.log('Basic provider - account info not available');
+              return null;
+            }
+          };
         }
         
         // Show UI sections
