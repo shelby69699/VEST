@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cardano Vesting Smart Contract</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    label { display: block; margin-top: 8px; }
+    input[type=text], input[type=number] { width: 100%; padding: 6px; margin-top: 2px; }
+    button { margin-top: 12px; padding: 8px 12px; }
+    #info-section, #deposit-section, #withdraw-section { margin-top: 20px; border: 1px solid #ddd; padding: 12px; }
+    h2 { margin-top: 0; }
+    p { word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>Cardano Vesting Smart Contract</h1>
+  <p>This simple dApp lets you connect your Cardano wallet (CIP-30), view balances and UTXOs, and interact with the vesting contract.</p>
+
+  <div id="wallet-section">
+    <button id="connect-btn">Connect Wallet</button>
+    <p id="connected-wallet"></p>
+  </div>
+
+  <div id="info-section" style="display:none;">
+    <h2>Wallet Information</h2>
+    <button id="refresh-info">Refresh Info</button>
+    <p><strong>Balance:</strong> <span id="balance"></span></p>
+    <p><strong>Lovelace:</strong> <span id="lovelace"></span></p>
+    <p><strong>Assets:</strong> <span id="assets"></span></p>
+    <p><strong>Change Address:</strong> <span id="changeAddress"></span></p>
+    <p><strong>Collateral UTXOs:</strong> <span id="collateral"></span></p>
+    <p><strong>UTXOs:</strong> <span id="utxos"></span></p>
+    <p><strong>Policy IDs:</strong> <span id="policyIds"></span></p>
+  </div>
+
+  <div id="deposit-section" style="display:none;">
+    <h2>Deposit Funds</h2>
+    <label>Beneficiary address:
+      <input type="text" id="beneficiary" placeholder="addr...">
+    </label>
+    <label>Amount (ADA):
+      <input type="number" id="amount" step="0.1" min="0">
+    </label>
+    <label>Lock duration (seconds):
+      <input type="number" id="lockSeconds" min="0">
+    </label>
+    <button id="deposit-btn">Deposit</button>
+    <p id="deposit-result"></p>
+  </div>
+
+  <div id="withdraw-section" style="display:none;">
+    <h2>Withdraw Funds</h2>
+    <label>Deposit transaction hash:
+      <input type="text" id="txHash" placeholder="txHash...">
+    </label>
+    <button id="withdraw-btn">Withdraw</button>
+    <p id="withdraw-result"></p>
+  </div>
+
+  <script type="module">
+    import { BrowserWallet, BlockfrostProvider, MeshTxBuilder } from 'https://esm.sh/@meshsdk/core@1.9.0-beta.69';
+    import { MeshVestingContract } from 'https://esm.sh/@meshsdk/contracts@1.0.1';
+
+    const API_KEY = 'mainnetRphtobeMUfaH1ulbeDPsDntux1ESWh9r';
+    let wallet;
+    let provider;
+    let meshTxBuilder;
+    let vestingContract;
+
+    async function connectWallet() {
+      const available = await BrowserWallet.getAvailableWallets();
+      if (!available || available.length === 0) {
+        alert('No CIP-30 wallets detected.');
+        return;
+      }
+      // choose the first wallet found; optionally prompt the user
+      const walletName = available[0].name;
+      wallet = await BrowserWallet.enable(walletName);
+      document.getElementById('connected-wallet').textContent = 'Connected to: ' + walletName;
+      provider = new BlockfrostProvider(API_KEY);
+      meshTxBuilder = new MeshTxBuilder({ fetcher: provider, submitter: provider });
+      vestingContract = new MeshVestingContract({ mesh: meshTxBuilder, fetcher: provider, networkId: 1 });
+      document.getElementById('info-section').style.display = '';
+      document.getElementById('deposit-section').style.display = '';
+      document.getElementById('withdraw-section').style.display = '';
+      await refreshWalletInfo();
+    }
+
+    async function refreshWalletInfo() {
+      try {
+        const balance = await wallet.getBalance();
+        document.getElementById('balance').textContent = JSON.stringify(balance);
+        const lovelace = await wallet.getLovelace();
+        document.getElementById('lovelace').textContent = lovelace;
+        const assets = await wallet.getAssets();
+        document.getElementById('assets').textContent = JSON.stringify(assets);
+        const changeAddress = await wallet.getChangeAddress();
+        document.getElementById('changeAddress').textContent = changeAddress;
+        const collateral = await wallet.getCollateral();
+        document.getElementById('collateral').textContent = JSON.stringify(collateral);
+        const utxos = await wallet.getUtxos();
+        document.getElementById('utxos').textContent = JSON.stringify(utxos);
+        const policyIds = await wallet.getPolicyIds();
+        document.getElementById('policyIds').textContent = JSON.stringify(policyIds);
+      } catch (err) {
+        console.error(err);
+        alert('Error fetching wallet info: ' + err);
+      }
+    }
+
+    async function deposit() {
+      const beneficiary = document.getElementById('beneficiary').value.trim();
+      const amountAda = parseFloat(document.getElementById('amount').value);
+      const lockSeconds = parseInt(document.getElementById('lockSeconds').value);
+      if (!beneficiary || isNaN(amountAda) || isNaN(lockSeconds)) {
+        alert('Please fill in beneficiary, amount and lock duration.');
+        return;
+      }
+      const amount = [{
+        unit: 'lovelace',
+        quantity: (BigInt(Math.floor(amountAda * 1e6))).toString(),
+      }];
+      const lockUntilTimestampMs = Date.now() + lockSeconds * 1000;
+      try {
+        const unsignedTxHex = await vestingContract.depositFund(
+          amount,
+          lockUntilTimestampMs,
+          beneficiary
+        );
+        const signedTx = await wallet.signTx(unsignedTxHex);
+        const txHash = await wallet.submitTx(signedTx);
+        document.getElementById('deposit-result').textContent = 'Deposit transaction submitted: ' + txHash;
+      } catch (err) {
+        console.error(err);
+        document.getElementById('deposit-result').textContent = 'Deposit failed: ' + err;
+      }
+    }
+
+    async function withdraw() {
+      const txHash = document.getElementById('txHash').value.trim();
+      if (!txHash) {
+        alert('Please enter a deposit transaction hash.');
+        return;
+      }
+      try {
+        const utxo = await vestingContract.getUtxoByTxHash(txHash);
+        if (!utxo) {
+          document.getElementById('withdraw-result').textContent = 'UTxO not found for transaction hash.';
+          return;
+        }
+        const unsignedTxHex = await vestingContract.withdrawFund(utxo);
+        const signedTx = await wallet.signTx(unsignedTxHex);
+        const withdrawalHash = await wallet.submitTx(signedTx);
+        document.getElementById('withdraw-result').textContent = 'Withdrawal transaction submitted: ' + withdrawalHash;
+      } catch (err) {
+        console.error(err);
+        document.getElementById('withdraw-result').textContent = 'Withdrawal failed: ' + err;
+      }
+    }
+
+    document.getElementById('connect-btn').addEventListener('click', connectWallet);
+    document.getElementById('refresh-info').addEventListener('click', refreshWalletInfo);
+    document.getElementById('deposit-btn').addEventListener('click', deposit);
+    document.getElementById('withdraw-btn').addEventListener('click', withdraw);
+  </script>
+</body>
+</html>
