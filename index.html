@@ -502,8 +502,69 @@
   </main>
 
   <script type="module">
-    import { BrowserWallet, BlockfrostProvider, MeshTxBuilder } from 'https://esm.sh/@meshsdk/core@1.7.0';
-    import { MeshVestingContract } from 'https://esm.sh/@meshsdk/contracts@1.7.0';
+    // Use unpkg CDN which is more reliable
+    let BrowserWallet, BlockfrostProvider, MeshTxBuilder, MeshVestingContract;
+    
+    try {
+      console.log('Loading MeshSDK from unpkg...');
+      const meshCore = await import('https://unpkg.com/@meshsdk/core@1.5.18/dist/index.esm.js');
+      const meshContracts = await import('https://unpkg.com/@meshsdk/contracts@1.5.18/dist/index.esm.js');
+      
+      BrowserWallet = meshCore.BrowserWallet;
+      BlockfrostProvider = meshCore.BlockfrostProvider; 
+      MeshTxBuilder = meshCore.MeshTxBuilder;
+      MeshVestingContract = meshContracts.MeshVestingContract;
+      
+      console.log('MeshSDK loaded successfully');
+    } catch (error) {
+      console.error('Failed to load MeshSDK:', error);
+      
+      // Fallback: Use direct CIP-30 implementation
+      BrowserWallet = {
+        getAvailableWallets: async () => {
+          if (!window.cardano) return [];
+          
+          const wallets = [];
+          for (const key in window.cardano) {
+            const wallet = window.cardano[key];
+            if (wallet && typeof wallet.enable === 'function') {
+              wallets.push({
+                name: key,
+                icon: wallet.icon || '',
+                version: wallet.apiVersion || '1.0.0'
+              });
+            }
+          }
+          return wallets;
+        },
+        
+        enable: async (walletName) => {
+          if (!window.cardano || !window.cardano[walletName]) {
+            throw new Error(`Wallet ${walletName} not found`);
+          }
+          
+          const api = await window.cardano[walletName].enable();
+          
+          // Add MeshSDK-compatible methods
+          return {
+            getNetworkId: () => api.getNetworkId(),
+            getBalance: () => api.getBalance(),
+            getLovelace: async () => {
+              const balance = await api.getBalance();
+              const lovelaceAsset = balance.find(asset => asset.unit === 'lovelace');
+              return lovelaceAsset ? lovelaceAsset.quantity : '0';
+            },
+            getChangeAddress: () => api.getChangeAddress(),
+            signTx: (tx, partialSign) => api.signTx(tx, partialSign),
+            submitTx: (signedTx) => api.submitTx(signedTx),
+            getUtxos: () => api.getUtxos(),
+            getCollateral: () => api.getCollateral()
+          };
+        }
+      };
+      
+      console.log('Using fallback CIP-30 implementation');
+    }
 
     const API_KEY = 'mainnetRphtobeMUfaH1ulbeDPsDntux1ESWh9r';
     let wallet;
@@ -551,81 +612,84 @@
       return `${address.slice(0, length)}...${address.slice(-8)}`;
     }
 
-    // Wallet connection using proper CIP-30 implementation
+    // Wallet connection with robust error handling
     async function connectWallet() {
       try {
         setLoading('connect-btn', true);
-        console.log('Starting wallet connection...');
+        console.log('🔗 Starting wallet connection...');
         
-        // Step 1: Get available wallets
+        // Check if any Cardano wallet is installed
+        if (!window.cardano) {
+          throw new Error('No Cardano wallet detected. Please install Nami, Eternl, or another CIP-30 compatible wallet and refresh the page.');
+        }
+        
+        console.log('🔍 Detecting available wallets...');
         const availableWallets = await BrowserWallet.getAvailableWallets();
-        console.log('Available wallets:', availableWallets);
+        console.log('📱 Available wallets:', availableWallets);
         
         if (!availableWallets || availableWallets.length === 0) {
-          throw new Error('No CIP-30 wallets found. Please install Nami, Eternl, Flint, or another compatible wallet.');
+          throw new Error('No compatible wallets found. Please install Nami, Eternl, Flint, or another CIP-30 wallet.');
         }
         
-        // Step 2: Select wallet (use first one or let user choose)
+        // Select the first available wallet (or let user choose)
         let selectedWallet = availableWallets[0];
-        if (availableWallets.length > 1) {
-          // Create a simple selection for multiple wallets
-          const walletNames = availableWallets.map(w => w.name).join('\n');
-          const choice = prompt(`Multiple wallets found:\n${walletNames}\n\nEnter wallet name (or press OK for ${availableWallets[0].name}):`);
-          if (choice) {
-            const found = availableWallets.find(w => w.name.toLowerCase() === choice.toLowerCase());
-            if (found) selectedWallet = found;
-          }
-        }
+        console.log(`🎯 Connecting to: ${selectedWallet.name}`);
         
-        console.log('Connecting to wallet:', selectedWallet.name);
-        
-        // Step 3: Connect to the selected wallet
+        // Connect to wallet
         wallet = await BrowserWallet.enable(selectedWallet.name);
-        console.log('Wallet enabled successfully');
+        console.log('✅ Wallet enabled successfully');
         
-        // Step 4: Verify connection by getting network ID
+        // Test the connection
         const networkId = await wallet.getNetworkId();
-        console.log('Connected to network:', networkId === 1 ? 'Mainnet' : 'Testnet');
+        console.log(`🌐 Network: ${networkId === 1 ? 'Mainnet' : 'Testnet'}`);
         
-        // Step 5: Update UI
+        // Update UI
         document.getElementById('wallet-name').textContent = selectedWallet.name;
         document.getElementById('wallet-connection-status').className = 'status status-connected';
         showElement('wallet-connection-status');
         hideElement('connect-btn');
         
-        // Step 6: Initialize blockchain providers
-        provider = new BlockfrostProvider(API_KEY);
-        meshTxBuilder = new MeshTxBuilder({ 
-          fetcher: provider, 
-          submitter: provider 
-        });
+        // Initialize providers only if MeshSDK loaded properly
+        if (BlockfrostProvider && MeshTxBuilder) {
+          console.log('🔧 Initializing blockchain providers...');
+          provider = new BlockfrostProvider(API_KEY);
+          meshTxBuilder = new MeshTxBuilder({ 
+            fetcher: provider, 
+            submitter: provider 
+          });
+          
+          if (MeshVestingContract) {
+            vestingContract = new MeshVestingContract({ 
+              mesh: meshTxBuilder, 
+              fetcher: provider, 
+              networkId: networkId 
+            });
+            console.log('📋 Vesting contract initialized');
+          }
+        } else {
+          console.warn('⚠️ MeshSDK not fully loaded - advanced features disabled');
+        }
         
-        // Step 7: Initialize vesting contract
-        vestingContract = new MeshVestingContract({ 
-          mesh: meshTxBuilder, 
-          fetcher: provider, 
-          networkId: networkId 
-        });
-        
-        // Step 8: Show wallet sections
+        // Show UI sections
         showElement('wallet-info-section');
         showElement('deposit-section');
         showElement('withdraw-section');
         
-        // Step 9: Load wallet information
+        // Load wallet info
         await refreshWalletInfo();
         
-        console.log('Wallet connection completed successfully');
+        console.log('🎉 Wallet connection completed successfully!');
+        showAlert('wallet-connection-status', 'success', `Connected to ${selectedWallet.name}!`);
         
       } catch (error) {
-        console.error('Wallet connection failed:', error);
+        console.error('❌ Wallet connection failed:', error);
         
         let errorMessage = 'Failed to connect wallet';
         if (error.message.includes('User declined') || error.message.includes('rejected')) {
           errorMessage = 'Connection was cancelled by user';
-        } else if (error.message.includes('No wallets found') || error.message.includes('No CIP-30')) {
-          errorMessage = 'No compatible wallets found. Please install a Cardano wallet like Nami or Eternl.';
-        } else if (error.message) {
+        } else if (error.message.includes('No wallets') || error.message.includes('No compatible')) {
+          errorMessage = 'No Cardano wallet found. Please install Nami, Eternl, or another CIP-30 wallet.';
+        } else {
           errorMessage = error.message;
         }
         
