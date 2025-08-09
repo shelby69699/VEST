@@ -1113,42 +1113,150 @@
           // Fallback: Manual transaction construction
           console.log('⚠️ Using manual transaction construction...');
           
-          // Build transaction manually using CIP-30
+          // Build and submit transaction manually using CIP-30
+          console.log('🔧 Building real transaction with CIP-30 APIs...');
+          showAlert('deposit-result', 'warning', '🔧 Building transaction...');
+          
           const utxos = await wallet.getUtxos();
+          console.log('📦 Available UTXOs:', utxos?.length || 0);
           
           if (!utxos || utxos.length === 0) {
             throw new Error('No UTxOs available in wallet');
           }
           
-          // Create a basic transaction structure
-          const tx = {
-            inputs: [utxos[0]], // Use first UTxO
-            outputs: [
-              {
-                address: CONTRACT_ADDRESS,
-                amount: txAssets,
-                datum: vestingDatum
-              }
-            ],
-            fee: '200000', // 0.2 ADA fee estimate
-            ttl: Date.now() + 600000 // 10 minutes from now
-          };
-          
-          console.log('Transaction structure:', tx);
-          
-          // For now, show construction details
-          showAlert('deposit-result', 'success', 
-            `🔧 Transaction prepared successfully!<br>
-            <div class="tx-status">
-              <strong>Contract Address:</strong><br>
-              <div class="tx-hash">${CONTRACT_ADDRESS}</div>
-              <strong>Unlock Date:</strong> ${unlockDate}<br>
-              <strong>Amount:</strong> ${amount} ${tokenType === 'lovelace' ? 'ADA' : 'tokens'}<br>
-              <strong>Beneficiary:</strong> ${truncateAddress(beneficiary)}<br>
-              <br>
-              <strong>⚠️ Note:</strong> Manual transaction submission needs wallet integration improvement.
-            </div>`
-          );
+          // Use Eternl's experimental buildTx if available
+          if (wallet.experimental && wallet.experimental.buildTx) {
+            console.log('🚀 Using Eternl experimental buildTx API...');
+            
+            try {
+              const txBuilder = {
+                inputs: utxos.slice(0, 2), // Use first 2 UTxOs for flexibility
+                outputs: [
+                  {
+                    address: CONTRACT_ADDRESS,
+                    amount: txAssets.map(asset => ({
+                      unit: asset.unit,
+                      quantity: asset.quantity
+                    })),
+                    plutusData: {
+                      alternative: 0,
+                      fields: [
+                        { int: lockUntilTimestampMs },
+                        { bytes: ownerPubKeyHash },
+                        { bytes: beneficiaryPubKeyHash }
+                      ]
+                    }
+                  }
+                ],
+                changeAddress: await wallet.getChangeAddress(),
+                requiredSigners: []
+              };
+              
+              console.log('🏗️ Transaction builder config:', txBuilder);
+              showAlert('deposit-result', 'warning', '⚙️ Constructing transaction...');
+              
+              const unsignedTx = await wallet.experimental.buildTx(txBuilder);
+              console.log('✅ Transaction built successfully');
+              
+              showAlert('deposit-result', 'warning', '✍️ Please sign the transaction in your wallet...');
+              const signedTx = await wallet.signTx(unsignedTx, false);
+              console.log('✅ Transaction signed');
+              
+              showAlert('deposit-result', 'warning', '📡 Submitting to blockchain...');
+              const txHash = await wallet.submitTx(signedTx);
+              
+              console.log('🎉 REAL TRANSACTION SUBMITTED!');
+              console.log('Transaction Hash:', txHash);
+              
+              showAlert('deposit-result', 'success', 
+                `🎉 REAL VESTING CONTRACT CREATED!<br>
+                <div class="tx-status">
+                  <strong>✅ Transaction Hash:</strong><br>
+                  <div class="tx-hash"><a href="https://${networkId === 1 ? 'cardanoscan.io' : 'preprod.cardanoscan.io'}/transaction/${txHash}" target="_blank">${txHash}</a></div>
+                  <strong>📍 Contract Address:</strong><br>
+                  <div class="tx-hash">${CONTRACT_ADDRESS}</div>
+                  <strong>⏰ Unlock Date:</strong> ${unlockDate}<br>
+                  <strong>💰 Amount:</strong> ${amount} ${tokenType === 'lovelace' ? 'ADA' : 'tokens'}<br>
+                  <strong>🎯 Beneficiary:</strong> ${truncateAddress(beneficiary)}<br>
+                  <br>
+                  <strong>🔐 REAL TRANSACTION SUBMITTED TO CARDANO!</strong><br>
+                  <strong>💡 Save this hash for withdrawal!</strong>
+                </div>`
+              );
+              
+            } catch (buildTxError) {
+              console.error('❌ BuildTx failed:', buildTxError);
+              throw new Error(`Transaction building failed: ${buildTxError.message}`);
+            }
+            
+          } else {
+            // Alternative: Use basic CIP-30 transaction construction
+            console.log('🛠️ Using basic CIP-30 transaction submission...');
+            
+            // Create simple transaction object for manual signing
+            const basicTx = {
+              inputs: utxos.slice(0, 1),
+              outputs: [
+                {
+                  address: CONTRACT_ADDRESS,
+                  amount: txAssets,
+                  plutusData: vestingDatum
+                }
+              ]
+            };
+            
+            console.log('📄 Basic transaction:', basicTx);
+            
+            try {
+              // Some wallets support direct transaction submission with basic format
+              showAlert('deposit-result', 'warning', '✍️ Attempting transaction signature...');
+              
+              const txHex = JSON.stringify(basicTx); // Simplified for compatibility
+              const signedTx = await wallet.signTx(txHex, false);
+              
+              showAlert('deposit-result', 'warning', '📡 Submitting transaction...');
+              const txHash = await wallet.submitTx(signedTx);
+              
+              console.log('🎉 TRANSACTION SUBMITTED WITH BASIC METHOD!');
+              
+              showAlert('deposit-result', 'success', 
+                `🎉 Vesting Contract Created!<br>
+                <div class="tx-status">
+                  <strong>Transaction Hash:</strong><br>
+                  <div class="tx-hash"><a href="https://${networkId === 1 ? 'cardanoscan.io' : 'preprod.cardanoscan.io'}/transaction/${txHash}" target="_blank">${txHash}</a></div>
+                  <strong>Contract Address:</strong><br>
+                  <div class="tx-hash">${CONTRACT_ADDRESS}</div>
+                  <strong>Unlock Date:</strong> ${unlockDate}<br>
+                  <strong>Amount:</strong> ${amount} ${tokenType === 'lovelace' ? 'ADA' : 'tokens'}<br>
+                  <strong>Beneficiary:</strong> ${truncateAddress(beneficiary)}<br>
+                  <br>
+                  <strong>✅ TRANSACTION SUBMITTED!</strong>
+                </div>`
+              );
+              
+            } catch (basicError) {
+              console.error('❌ Basic transaction failed:', basicError);
+              
+              showAlert('deposit-result', 'error', 
+                `❌ Transaction submission failed<br>
+                <div class="tx-status">
+                  <strong>Error:</strong> ${basicError.message}<br>
+                  <br>
+                  <strong>🔄 To fix this:</strong><br>
+                  1. Get a Blockfrost API key from <a href="https://blockfrost.io" target="_blank">blockfrost.io</a><br>
+                  2. Add it to the code (see BLOCKFROST_SETUP.md)<br>
+                  3. This will enable full MeshSDK functionality<br>
+                  <br>
+                  <strong>📋 Transaction was prepared for:</strong><br>
+                  • Contract: ${truncateAddress(CONTRACT_ADDRESS)}<br>
+                  • Amount: ${amount} ${tokenType === 'lovelace' ? 'ADA' : 'tokens'}<br>
+                  • Beneficiary: ${truncateAddress(beneficiary)}
+                </div>`
+              );
+              
+              throw basicError;
+            }
+          }
         }
         
         // Reset form
