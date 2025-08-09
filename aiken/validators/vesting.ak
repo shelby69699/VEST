@@ -8,17 +8,22 @@ use vodka_validity_range.{valid_after}
 //  timestamp.  Either the owner may spend the funds at any time, or the
 //  beneficiary may spend them after the `lock_until` timestamp has passed.
 //
-validator {
-  pub fn vesting(datum: VestingDatum, _redeemer: Data, ctx: ScriptContext) {
+validator vesting {
+  spend(datum: Option<VestingDatum>, _redeemer: Data, _output_reference: Data, ctx: ScriptContext) {
+    let vesting_datum = when datum is {
+      Some(d) -> d
+      None -> fail @"No datum found"
+    }
+    
     // The validator should only be used for spending UTxOs.
     when ctx.purpose is {
       Spend(_) -> or {
         // Allow the owner to spend at any time.
-        key_signed(ctx.transaction.extra_signatories, datum.owner),
+        key_signed(ctx.transaction.extra_signatories, vesting_datum.owner),
         // Allow the beneficiary to spend after the lock period has passed.
         and {
-          key_signed(ctx.transaction.extra_signatories, datum.beneficiary),
-          valid_after(ctx.transaction.validity_range, datum.lock_until),
+          key_signed(ctx.transaction.extra_signatories, vesting_datum.beneficiary),
+          valid_after(ctx.transaction.validity_range, vesting_datum.lock_until),
         },
       }
       _ -> False
