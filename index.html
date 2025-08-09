@@ -402,14 +402,14 @@
       <div class="hero">
         <h1>Secure Vesting Contracts</h1>
         <p>Lock your ADA for future release with time-based smart contracts on Cardano. Perfect for team vesting, savings, or trustless escrow.</p>
-      </div>
+  </div>
 
       <div id="wallet-info-section" class="card hidden">
         <div class="card-header">
           <div class="card-icon" style="background: rgba(16, 185, 129, 0.1); color: var(--success);">
             <i class="fas fa-info-circle"></i>
           </div>
-          <h2>Wallet Information</h2>
+    <h2>Wallet Information</h2>
           <button id="refresh-info" class="btn btn-secondary">
             <i class="fas fa-sync-alt"></i>
             Refresh
@@ -429,7 +429,7 @@
             <span id="changeAddress" class="wallet-info-value">-</span>
           </div>
         </div>
-      </div>
+  </div>
 
       <div class="grid grid-2">
         <div id="deposit-section" class="card hidden">
@@ -475,7 +475,7 @@
             </button>
           </form>
           <div id="deposit-result" class="hidden"></div>
-        </div>
+  </div>
 
         <div id="withdraw-section" class="card hidden">
           <div class="card-header">
@@ -498,40 +498,12 @@
           <div id="withdraw-result" class="hidden"></div>
         </div>
       </div>
-    </div>
+  </div>
   </main>
 
   <script type="module">
-    // Try multiple CDN sources for better reliability
-    let BrowserWallet, BlockfrostProvider, MeshTxBuilder, MeshVestingContract;
-    
-    try {
-      // Primary CDN - esm.sh
-      const coreModule = await import('https://esm.sh/@meshsdk/core@1.7.0');
-      const contractsModule = await import('https://esm.sh/@meshsdk/contracts@1.7.0');
-      
-      BrowserWallet = coreModule.BrowserWallet;
-      BlockfrostProvider = coreModule.BlockfrostProvider;
-      MeshTxBuilder = coreModule.MeshTxBuilder;
-      MeshVestingContract = contractsModule.MeshVestingContract;
-    } catch (error) {
-      console.error('Failed to load from esm.sh, trying unpkg...', error);
-      
-      try {
-        // Fallback CDN - unpkg
-        const coreModule = await import('https://unpkg.com/@meshsdk/core@1.7.0/dist/index.esm.js');
-        const contractsModule = await import('https://unpkg.com/@meshsdk/contracts@1.7.0/dist/index.esm.js');
-        
-        BrowserWallet = coreModule.BrowserWallet;
-        BlockfrostProvider = coreModule.BlockfrostProvider;
-        MeshTxBuilder = coreModule.MeshTxBuilder;
-        MeshVestingContract = contractsModule.MeshVestingContract;
-      } catch (fallbackError) {
-        console.error('Failed to load MeshSDK from all CDNs:', fallbackError);
-        showAlert('wallet-connection-status', 'error', 'Failed to load MeshSDK. Please refresh the page.');
-        return;
-      }
-    }
+    import { BrowserWallet, BlockfrostProvider, MeshTxBuilder } from 'https://esm.sh/@meshsdk/core@1.7.0';
+    import { MeshVestingContract } from 'https://esm.sh/@meshsdk/contracts@1.7.0';
 
     const API_KEY = 'mainnetRphtobeMUfaH1ulbeDPsDntux1ESWh9r';
     let wallet;
@@ -579,83 +551,82 @@
       return `${address.slice(0, length)}...${address.slice(-8)}`;
     }
 
-    // Wallet connection
+    // Wallet connection using proper CIP-30 implementation
     async function connectWallet() {
       try {
         setLoading('connect-btn', true);
+        console.log('Starting wallet connection...');
         
-        // Check if MeshSDK loaded properly
-        if (!BrowserWallet) {
-          showAlert('wallet-connection-status', 'error', 'MeshSDK not loaded. Please refresh the page.');
-          return;
+        // Step 1: Get available wallets
+        const availableWallets = await BrowserWallet.getAvailableWallets();
+        console.log('Available wallets:', availableWallets);
+        
+        if (!availableWallets || availableWallets.length === 0) {
+          throw new Error('No CIP-30 wallets found. Please install Nami, Eternl, Flint, or another compatible wallet.');
         }
         
-        console.log('Checking for available wallets...');
-        
-        // Check if window.cardano exists (required for CIP-30)
-        if (!window.cardano) {
-          showAlert('wallet-connection-status', 'error', 'No Cardano wallets detected. Please install Nami, Eternl, or another CIP-30 wallet.');
-          return;
+        // Step 2: Select wallet (use first one or let user choose)
+        let selectedWallet = availableWallets[0];
+        if (availableWallets.length > 1) {
+          // Create a simple selection for multiple wallets
+          const walletNames = availableWallets.map(w => w.name).join('\n');
+          const choice = prompt(`Multiple wallets found:\n${walletNames}\n\nEnter wallet name (or press OK for ${availableWallets[0].name}):`);
+          if (choice) {
+            const found = availableWallets.find(w => w.name.toLowerCase() === choice.toLowerCase());
+            if (found) selectedWallet = found;
+          }
         }
         
-        const available = await BrowserWallet.getAvailableWallets();
-        console.log('Available wallets:', available);
+        console.log('Connecting to wallet:', selectedWallet.name);
         
-        if (!available || available.length === 0) {
-          showAlert('wallet-connection-status', 'error', 'No CIP-30 wallets detected. Please install a Cardano wallet like Nami or Eternl.');
-          return;
-        }
-
-        // Let user choose wallet if multiple are available
-        let walletName;
-        if (available.length === 1) {
-          walletName = available[0].name;
-        } else {
-          // Show wallet selection
-          const walletOptions = available.map(w => w.name).join(', ');
-          walletName = prompt(`Multiple wallets found: ${walletOptions}. Enter wallet name:`) || available[0].name;
-        }
+        // Step 3: Connect to the selected wallet
+        wallet = await BrowserWallet.enable(selectedWallet.name);
+        console.log('Wallet enabled successfully');
         
-        console.log('Connecting to wallet:', walletName);
-        wallet = await BrowserWallet.enable(walletName);
+        // Step 4: Verify connection by getting network ID
+        const networkId = await wallet.getNetworkId();
+        console.log('Connected to network:', networkId === 1 ? 'Mainnet' : 'Testnet');
         
-        if (!wallet) {
-          throw new Error('Failed to enable wallet');
-        }
-        
-        console.log('Wallet connected successfully');
-        
-        // Update UI to show connected state
-        document.getElementById('wallet-name').textContent = walletName;
+        // Step 5: Update UI
+        document.getElementById('wallet-name').textContent = selectedWallet.name;
         document.getElementById('wallet-connection-status').className = 'status status-connected';
         showElement('wallet-connection-status');
         hideElement('connect-btn');
         
-        // Initialize providers and contracts
-        console.log('Initializing providers...');
+        // Step 6: Initialize blockchain providers
         provider = new BlockfrostProvider(API_KEY);
-        meshTxBuilder = new MeshTxBuilder({ fetcher: provider, submitter: provider });
-        vestingContract = new MeshVestingContract({ mesh: meshTxBuilder, fetcher: provider, networkId: 1 });
+        meshTxBuilder = new MeshTxBuilder({ 
+          fetcher: provider, 
+          submitter: provider 
+        });
         
-        // Show sections
+        // Step 7: Initialize vesting contract
+        vestingContract = new MeshVestingContract({ 
+          mesh: meshTxBuilder, 
+          fetcher: provider, 
+          networkId: networkId 
+        });
+        
+        // Step 8: Show wallet sections
         showElement('wallet-info-section');
         showElement('deposit-section');
         showElement('withdraw-section');
         
+        // Step 9: Load wallet information
         await refreshWalletInfo();
         
-        showAlert('wallet-connection-status', 'success', `Successfully connected to ${walletName}!`);
+        console.log('Wallet connection completed successfully');
         
-      } catch (err) {
-        console.error('Wallet connection error:', err);
+      } catch (error) {
+        console.error('Wallet connection failed:', error);
+        
         let errorMessage = 'Failed to connect wallet';
-        
-        if (err.message.includes('User declined')) {
-          errorMessage = 'Connection cancelled by user';
-        } else if (err.message.includes('Not supported')) {
-          errorMessage = 'Wallet not supported or not properly installed';
-        } else if (err.message) {
-          errorMessage = err.message;
+        if (error.message.includes('User declined') || error.message.includes('rejected')) {
+          errorMessage = 'Connection was cancelled by user';
+        } else if (error.message.includes('No wallets found') || error.message.includes('No CIP-30')) {
+          errorMessage = 'No compatible wallets found. Please install a Cardano wallet like Nami or Eternl.';
+        } else if (error.message) {
+          errorMessage = error.message;
         }
         
         showAlert('wallet-connection-status', 'error', errorMessage);
@@ -667,12 +638,18 @@
     async function refreshWalletInfo() {
       try {
         setLoading('refresh-info', true);
+        console.log('Refreshing wallet information...');
         
+        // Use proper CIP-30 APIs to get wallet information
         const [balance, lovelace, changeAddress] = await Promise.all([
           wallet.getBalance(),
-          wallet.getLovelace(),
+          wallet.getLovelace(), 
           wallet.getChangeAddress()
         ]);
+        
+        console.log('Wallet balance:', balance);
+        console.log('Lovelace amount:', lovelace);
+        console.log('Change address:', changeAddress);
         
         // Update wallet info display
         document.getElementById('balance').textContent = formatADA(lovelace) + ' ADA';
@@ -680,9 +657,19 @@
         document.getElementById('changeAddress').textContent = truncateAddress(changeAddress);
         document.getElementById('changeAddress').title = changeAddress; // Full address on hover
         
-      } catch (err) {
-        console.error('Error refreshing wallet info:', err);
-        showAlert('wallet-info-section', 'error', `Error fetching wallet info: ${err.message}`);
+        console.log('Wallet info updated successfully');
+        
+      } catch (error) {
+        console.error('Error refreshing wallet info:', error);
+        
+        let errorMessage = 'Failed to fetch wallet information';
+        if (error.message.includes('User declined')) {
+          errorMessage = 'User declined wallet access';
+        } else if (error.message) {
+          errorMessage = error.message;
+        }
+        
+        showAlert('wallet-info-section', 'error', errorMessage);
       } finally {
         setLoading('refresh-info', false);
       }
@@ -709,8 +696,8 @@
         setLoading('deposit-btn', true);
         hideElement('deposit-result');
         
-        const beneficiary = document.getElementById('beneficiary').value.trim();
-        const amountAda = parseFloat(document.getElementById('amount').value);
+      const beneficiary = document.getElementById('beneficiary').value.trim();
+      const amountAda = parseFloat(document.getElementById('amount').value);
         const lockDuration = document.getElementById('lockDuration').value;
         
         let lockSeconds;
@@ -733,15 +720,15 @@
         
         if (isNaN(lockSeconds) || lockSeconds < 60) {
           showAlert('deposit-result', 'error', 'Please enter a valid lock duration (minimum 60 seconds).');
-          return;
-        }
+        return;
+      }
         
-        const amount = [{
-          unit: 'lovelace',
-          quantity: (BigInt(Math.floor(amountAda * 1e6))).toString(),
-        }];
+      const amount = [{
+        unit: 'lovelace',
+        quantity: (BigInt(Math.floor(amountAda * 1e6))).toString(),
+      }];
         
-        const lockUntilTimestampMs = Date.now() + lockSeconds * 1000;
+      const lockUntilTimestampMs = Date.now() + lockSeconds * 1000;
         const unlockDate = new Date(lockUntilTimestampMs).toLocaleString();
         
         const unsignedTxHex = await vestingContract.depositFund(
@@ -786,12 +773,12 @@
         setLoading('withdraw-btn', true);
         hideElement('withdraw-result');
         
-        const txHash = document.getElementById('txHash').value.trim();
+      const txHash = document.getElementById('txHash').value.trim();
         
-        if (!txHash) {
+      if (!txHash) {
           showAlert('withdraw-result', 'error', 'Please enter a deposit transaction hash.');
-          return;
-        }
+        return;
+      }
         
         showAlert('withdraw-result', 'warning', 'Looking up vesting contract...');
         
@@ -829,67 +816,8 @@
       }
     }
 
-    // Alternative wallet connection for debugging
-    async function connectWalletFallback() {
-      console.log('Using fallback wallet connection...');
-      
-      if (!window.cardano) {
-        alert('No Cardano wallet detected. Please install Nami, Eternl, or another CIP-30 wallet.');
-        return;
-      }
-      
-      const wallets = Object.keys(window.cardano).filter(key => 
-        window.cardano[key] && typeof window.cardano[key].enable === 'function'
-      );
-      
-      console.log('Detected wallets:', wallets);
-      
-      if (wallets.length === 0) {
-        alert('No compatible wallets found. Please install a CIP-30 wallet.');
-        return;
-      }
-      
-      try {
-        const walletName = wallets[0];
-        const api = await window.cardano[walletName].enable();
-        
-        document.getElementById('wallet-name').textContent = walletName;
-        document.getElementById('wallet-connection-status').className = 'status status-connected';
-        showElement('wallet-connection-status');
-        hideElement('connect-btn');
-        
-        alert(`Connected to ${walletName}! Note: Advanced features require MeshSDK to load properly.`);
-        
-        // Show basic sections
-        showElement('wallet-info-section');
-        showElement('deposit-section');
-        showElement('withdraw-section');
-        
-      } catch (err) {
-        console.error('Fallback connection failed:', err);
-        alert('Failed to connect wallet: ' + err.message);
-      }
-    }
-
-    // Check if page is loaded properly
-    function initializeApp() {
-      console.log('Initializing app...');
-      console.log('Window.cardano:', window.cardano);
-      console.log('BrowserWallet loaded:', !!BrowserWallet);
-      
-      // Add fallback button if MeshSDK fails
-      if (!BrowserWallet) {
-        const connectBtn = document.getElementById('connect-btn');
-        connectBtn.textContent = 'Connect Wallet (Fallback)';
-        connectBtn.addEventListener('click', connectWalletFallback);
-        console.log('Using fallback wallet connection');
-      } else {
-        document.getElementById('connect-btn').addEventListener('click', connectWallet);
-        console.log('Using MeshSDK wallet connection');
-      }
-    }
-
     // Event listeners
+    document.getElementById('connect-btn').addEventListener('click', connectWallet);
     document.getElementById('refresh-info').addEventListener('click', refreshWalletInfo);
     document.getElementById('lockDuration').addEventListener('change', handleLockDurationChange);
     document.getElementById('deposit-form').addEventListener('submit', handleDeposit);
@@ -898,8 +826,8 @@
     // Initialize
     handleLockDurationChange();
     
-    // Initialize app after a short delay to let modules load
-    setTimeout(initializeApp, 1000);
+    // Log initialization
+    console.log('Cardano Vesting Platform initialized with MeshSDK v1.7.0');
   </script>
 </body>
 </html>
