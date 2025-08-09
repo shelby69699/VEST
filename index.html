@@ -585,7 +585,33 @@
                   const lovelaceAsset = balance.find(asset => asset.unit === 'lovelace');
                   return lovelaceAsset ? lovelaceAsset.quantity : '0';
                 } else if (typeof balance === 'string') {
-                  return balance;
+                  // Parse CBOR hex string for lovelace amount
+                  // The string contains CBOR-encoded value with lovelace typically at the start
+                  try {
+                    // Look for the lovelace amount in the CBOR hex string
+                    // Format: 82 (array of 2) 1a (positive int) XXXXXXXX (4-byte value) ...
+                    const hexMatch = balance.match(/^82[0-9a-f]*?1a([0-9a-f]{8})/);
+                    if (hexMatch) {
+                      const lovelaceHex = hexMatch[1];
+                      const lovelaceAmount = parseInt(lovelaceHex, 16);
+                      console.log('Parsed lovelace from CBOR:', lovelaceAmount);
+                      return lovelaceAmount.toString();
+                    }
+                    
+                    // Alternative: look for any lovelace indicator
+                    const altMatch = balance.match(/1a([0-9a-f]{8})/);
+                    if (altMatch) {
+                      const lovelaceAmount = parseInt(altMatch[1], 16);
+                      console.log('Parsed lovelace (alternative):', lovelaceAmount);
+                      return lovelaceAmount.toString();
+                    }
+                    
+                    console.warn('Could not parse lovelace from CBOR string');
+                    return balance;
+                  } catch (parseError) {
+                    console.warn('CBOR parsing failed:', parseError);
+                    return balance;
+                  }
                 } else if (balance && balance.lovelace) {
                   return balance.lovelace;
                 } else {
@@ -839,8 +865,8 @@
           };
           
           // Initialize contract address
-          const CONTRACT_ADDRESS = 'addr1xq2e3x3y2jdpkguvuzpn2j8e2k0ylys26ke4787guwkzmtglys9rm';
-          console.log('🏦 Contract Address:', CONTRACT_ADDRESS);
+          window.CONTRACT_ADDRESS = 'addr1xq2e3x3y2jdpkguvuzpn2j8e2k0ylys26ke4787guwkzmtglys9rm';
+          console.log('🏦 Contract Address:', window.CONTRACT_ADDRESS);
         }
         
         // Show UI sections
@@ -954,7 +980,7 @@
         setLoading('deposit-btn', true);
         hideElement('deposit-result');
         
-        const beneficiary = document.getElementById('beneficiary').value.trim();
+      const beneficiary = document.getElementById('beneficiary').value.trim();
         const amount = parseFloat(document.getElementById('amount').value);
         const tokenType = document.getElementById('token-type').value;
         const tokenId = document.getElementById('token-id').value.trim();
@@ -995,14 +1021,14 @@
         
         if (isNaN(lockSeconds) || lockSeconds < 60) {
           showAlert('deposit-result', 'error', 'Please enter a valid lock duration (minimum 60 seconds).');
-          return;
-        }
+        return;
+      }
         
         // Prepare transaction assets
         let txAssets;
         if (tokenType === 'lovelace') {
           txAssets = [{
-            unit: 'lovelace',
+        unit: 'lovelace',
             quantity: (BigInt(Math.floor(amount * 1e6))).toString(),
           }];
         } else {
@@ -1025,10 +1051,11 @@
           ];
         }
         
-        const lockUntilTimestampMs = Date.now() + lockSeconds * 1000;
+      const lockUntilTimestampMs = Date.now() + lockSeconds * 1000;
         const unlockDate = new Date(lockUntilTimestampMs).toLocaleString();
         
         console.log('🔄 Creating vesting transaction...');
+        const CONTRACT_ADDRESS = window.CONTRACT_ADDRESS || 'addr1xq2e3x3y2jdpkguvuzpn2j8e2k0ylys26ke4787guwkzmtglys9rm';
         console.log('Contract Address:', CONTRACT_ADDRESS);
         console.log('Assets:', txAssets);
         console.log('Lock Until:', lockUntilTimestampMs);
@@ -1059,14 +1086,14 @@
         
         if (MeshTxBuilder && vestingContract) {
           // Use MeshSDK if available
-          const unsignedTxHex = await vestingContract.depositFund(
+        const unsignedTxHex = await vestingContract.depositFund(
             txAssets,
-            lockUntilTimestampMs,
-            beneficiary
-          );
+          lockUntilTimestampMs,
+          beneficiary
+        );
           
-          const signedTx = await wallet.signTx(unsignedTxHex);
-          const txHash = await wallet.submitTx(signedTx);
+        const signedTx = await wallet.signTx(unsignedTxHex);
+        const txHash = await wallet.submitTx(signedTx);
           
           console.log('✅ Transaction submitted:', txHash);
           
